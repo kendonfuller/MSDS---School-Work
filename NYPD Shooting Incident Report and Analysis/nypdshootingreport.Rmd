@@ -1,0 +1,343 @@
+---
+title: "NYPD Shooting Incident Data Analysis and Report"
+author: "Kendon Fuller"
+date: "2025-06-09"
+output: html_document
+---
+<style>
+  table {
+  table-layout: fixed;
+  width: 60%;
+  margin: auto;
+}
+  table th, table td {
+  width: 20%;
+  word-wrap: break-word;
+  text-align: center:
+  
+}
+
+body{
+font-family: "Times New Roman", Times, serif;
+font-size: 12pt;
+}
+h1{
+  font-size: 16pt;
+  font-weight: bold;
+}
+
+h2 {
+  font-size: 14pt;
+  font-weight: bold;
+}
+
+h3 {
+  font-size: 12pt;
+  font-weight: normal;
+}
+</style>
+
+```{r setup, message=FALSE, warning=FALSE, include=FALSE}
+library(tidyverse)
+library(lubridate)
+library(ggplot2)
+library(leaflet)
+library(knitr)
+library(stringr)
+
+knitr::opts_chunk$set(
+  comment = NA,     
+  results = 'asis'
+)
+```
+
+## Data Loading
+```{r load_data}
+url_in <- "https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD"
+shootings_raw <- read_csv(url_in)
+head(shootings_raw)
+```
+
+## Initial Look
+```{r summary_raw}
+summary(shootings_raw)
+glimpse(shootings_raw)
+colnames(shootings_raw)
+```
+
+## Cleaned Data
+```{r clean_data}
+
+shootings_clean <- shootings_raw %>%
+  mutate(
+    OCCUR_DATE = mdy(OCCUR_DATE),
+    BORO = as.factor(BORO),
+    PERP_SEX = as.factor(PERP_SEX),
+    PERP_RACE = as.factor(PERP_RACE),
+    VIC_SEX = as.factor(VIC_SEX),
+    VIC_RACE = as.factor(VIC_RACE)
+  ) %>%
+  mutate(
+    Period = case_when(
+      OCCUR_DATE >= as.Date("2006-01-01") & OCCUR_DATE <= as.Date("2010-12-31") ~ "2006–2010",
+      OCCUR_DATE >= as.Date("2011-01-01") & OCCUR_DATE <= as.Date("2015-12-31") ~ "2011–2015",
+      OCCUR_DATE >= as.Date("2016-01-01") & OCCUR_DATE <= as.Date("2020-12-31") ~ "2016–2020",
+      OCCUR_DATE >= as.Date("2021-01-01") ~ "2021–2024",
+      TRUE ~ NA_character_
+    )
+  ) %>%
+  rename(
+    `Occur Date` = OCCUR_DATE,
+    `Perp Sex` = PERP_SEX,
+    `Perp Race` = PERP_RACE,
+    `Perp Age Group` = PERP_AGE_GROUP,
+    `Victim Sex` = VIC_SEX,
+    `Victim Race` = VIC_RACE,
+    `Victim Age Group` = VIC_AGE_GROUP
+  ) %>%
+  select(
+    -INCIDENT_KEY,
+    -OCCUR_TIME,
+    -LOC_OF_OCCUR_DESC,
+    -PRECINCT,
+    -JURISDICTION_CODE,
+    -LOC_CLASSFCTN_DESC,
+    -LOCATION_DESC,
+    -STATISTICAL_MURDER_FLAG,
+    -X_COORD_CD,
+    -Y_COORD_CD,
+    -Lon_Lat
+  )
+
+
+```
+```{r clean-look, echo=FALSE}
+summary(shootings_clean)
+glimpse(shootings_clean)
+colnames(shootings_clean)
+```
+
+## Interactive Map
+```{r shooting-leaflet, warning=FALSE, message=FALSE}
+# filtering missing coordinates
+shooting_coords <- shootings_raw %>%
+  filter(!is.na(Longitude), !is.na(Latitude))
+
+# Creating interactive map
+leaflet(shooting_coords) %>%
+  addProviderTiles("CartoDB.Positron") %>%
+  addCircleMarkers(
+    lng = ~Longitude,
+    lat = ~Latitude,
+    radius = 2,
+    color = "red",
+    stroke = FALSE,
+    fillOpacity = 0.2,
+    popup = ~paste0(
+      "Date: ", OCCUR_DATE,
+      "<br>Borough: ", BORO,
+      "<br>Victim Sex: ", VIC_SEX,
+      "<br>Perpetrator Sex: ", PERP_SEX
+    )
+  ) %>%
+  addLegend("bottomright", colors = "red", labels = "Shooting Incident")
+```
+
+```{r borough-pop-share, echo=FALSE}
+pop_by_year <- tribble(
+  ~Year, ~Borough,       ~Population,
+  2000,  "Manhattan",    1537195,
+  2000,  "Brooklyn",     2465326,
+  2000,  "Queens",       2229379,
+  2000,  "Bronx",        1332650,
+  2000,  "Staten Island",443728,
+  2010,  "Manhattan",    1585873,
+  2010,  "Brooklyn",     2504700,
+  2010,  "Queens",       2230722,
+  2010,  "Bronx",        1385108,
+  2010,  "Staten Island",468730,
+  2020,  "Manhattan",    1694251,
+  2020,  "Brooklyn",     2736074,
+  2020,  "Queens",       2405464,
+  2020,  "Bronx",        1472654,
+  2020,  "Staten Island",495747
+)
+
+knitr::kable(
+  pop_by_year,
+  caption = "NYC Borough Population by Decade",
+  align   = c("r","l","r")
+)
+
+```
+# Statistical Analysis
+```{r pop_share_chart, echo=FALSE}
+pop_share <- pop_by_year %>%
+  group_by(Year) %>%
+  mutate(
+    Total_NYC = sum(Population),
+    Share = Population / Total_NYC * 100
+  ) %>%
+  ungroup()
+
+# Plot the shares over time
+ggplot(pop_share, aes(x = Year, y = Share, color = Borough, group = Borough)) +
+  geom_line(size = 1.2) +
+  geom_point(size = 3) +
+  scale_x_continuous(breaks = c(2000, 2010, 2020)) +
+  scale_y_continuous(labels = scales::percent_format(scale = 1)) +
+  labs(
+    title = "Borough Population Share of NYC (2000–2020)",
+    x = "Year",
+    y = "Share of Total NYC Population (%)",
+    color = "Borough"
+  ) +
+  theme_minimal()
+```
+
+```{r borough_table, echo=FALSE}
+
+# Your population share data (assuming it's already in 'pop_share')
+pop_table <- pop_share %>%
+  select(Year, Borough, Share) %>%
+  mutate(Share = round(Share, 1)) %>%
+  pivot_wider(names_from = Borough, values_from = Share)
+
+# Create the table
+kable(pop_table, caption = "NYC Borough Population Share by Year (%)")
+```
+
+
+```{r shootings-by-borough, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+shootings_clean %>%
+  filter(!is.na(BORO), BORO != "") %>%
+  count(BORO) %>%
+  ggplot(aes(x = reorder(BORO, n), y = n, fill = BORO)) +
+    geom_col(show.legend = FALSE) +
+    labs(
+      title = "Number of Shooting Incidents by Borough",
+      x     = "Borough",
+      y     = "Total Shootings"
+    ) +
+    theme_minimal(base_size = 14) +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+```{r shootings-per-capita-final, echo=FALSE, message=FALSE, warning=FALSE, fig.width=6, fig.height=4}
+per_capita_df <- shootings_clean %>%
+  # turn BORO (e.g. "BRONX") into "Bronx", etc.
+  mutate(Borough = str_to_title(as.character(BORO))) %>%
+  # keep only the five real boroughs
+  filter(Borough %in% c("Bronx","Brooklyn","Manhattan","Queens","Staten Island")) %>%
+  # total shootings
+  count(Borough, name = "Total_Shootings") %>%
+  # 2010 census population
+  left_join(
+    pop_by_year %>% filter(Year == 2010) %>% select(Borough, Population),
+    by = "Borough"
+  ) %>%
+  # rate per 100k people
+  mutate(Shootings_per_100k = Total_Shootings / Population * 100000)
+
+#plotting bar chart
+ggplot(per_capita_df, aes(x = Borough, y = Shootings_per_100k, fill = Borough)) +
+  geom_col(show.legend = FALSE) +
+  labs(
+    title = "Total Shootings per 100,000 Residents by Borough (2010 Census)",
+    x     = "Borough",
+    y     = "Shootings per 100,000"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+```{r borough-shootings-percent, echo=FALSE}
+shootings_clean %>%
+  filter(!is.na(BORO), BORO != "") %>%
+  count(BORO, name = "Count") %>%
+  mutate(
+    `Percent of Total (%)` = round(Count / sum(Count) * 100, 1)
+  ) %>%
+  arrange(desc(`Percent of Total (%)`)) %>%
+  knitr::kable(
+    caption   = "Percentage of Shooting Incidents by Borough",
+    col.names = c("Borough", "Number of Shootings", "Percent of Total (%)")
+  )
+```
+ 
+
+## Chi-Square Goodness-of-Fit Test
+```{r chi-square, echo=FALSE}
+#name mapping
+shootings_obs <- shootings_clean %>%
+  mutate(Borough = str_to_title(as.character(BORO))) %>%
+  filter(Borough %in% pop_by_year$Borough) %>%
+  count(Borough, name = "Observed") %>%
+  arrange(Borough)
+
+#expected
+total_shootings <- sum(shootings_obs$Observed)
+exp_props <- pop_by_year %>%
+  filter(Year %in% c(2000,2010,2020)) %>%
+  group_by(Borough) %>%
+  summarize(avg_pop = mean(Population), .groups="drop") %>%
+  mutate(prop = avg_pop / sum(avg_pop)) %>%
+  arrange(Borough)
+
+shootings_exp <- exp_props %>%
+  transmute(Borough, Expected = round(prop * total_shootings))
+
+#chisq gof test
+gof <- chisq.test(
+  x = shootings_obs$Observed,
+  p = exp_props$prop
+)
+
+#table output
+print(
+  knitr::kable(
+    left_join(shootings_obs, shootings_exp, by="Borough"),
+    caption = "Observed vs. Expected Counts"
+)
+)
+print(gof)
+
+```
+## Observed vs. Expected Counts by Borough
+
+```{r obs-vs-exp-plot, echo=FALSE, message=FALSE, warning=FALSE}
+obs_exp_df <- left_join(shootings_obs, shootings_exp, by = "Borough")
+
+obs_exp_df_long <- obs_exp_df %>%
+  pivot_longer(
+    cols      = c("Observed", "Expected"),
+    names_to  = "Type",
+    values_to = "Count"
+  )
+
+ggplot(obs_exp_df_long, aes(x = Borough, y = Count, fill = Type)) +
+  geom_col(position = position_dodge(width = 0.8), width = 0.7) +
+  labs(
+    title = "Observed vs. Expected Shooting Counts by Borough",
+    x     = "Borough",
+    y     = "Count",
+    fill  = ""
+  ) +
+  theme_minimal(base_size = 12) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+# Conclusion
+
+### I used a chi-square goodness-of-fit test to compare the proportions of shootings in each borough to their proportion of population to all of NYC. The reasoning behind choosing this test is because I was seeking to compare five discrete observed categories (the different boroughs) to an expected distribution. The expected distribution being that the proportion of shootings in NYC for each borough would be similiar to the population proportion. From the basic analysis and charts above, it was easy to tell that was not the case. The most populated borough, Brooklyn, had a MPP (mean population proportion) of about 30.83% across the past three decennial censuses had a BSP (borough shooting proportion) of 39.3%. The observed proportion is much lower than the expected. While Staten Island had a MPP of 5.6% and a BSP of 2.8%. Staten Island experienced half the expected shootings for its population.
+
+### The test yielded a chi-square value of 6344.6 with 4 degress of a freedom and a p-value way below the threshold (p<0.00001). I reject the null hypothesis. The BSP's are not inline with the MPP's.
+
+### I spent years of as a research assistant in a social psychology lab at a university. I found that research incredibly engaging because it helped the world make sense to me. That there existed all of these hidden phenomenoms in the world. The pattern of shootings is not just random and there are reasons for the shootings. My assumption is that if I did further analysis into this topic, I would find patterns of shooting that coincide with lower socioeconomic status or maybe certain streets that have more bars are prone to having more violent incidences or maybe some areas have a lack of police prescence compared to others. I do not have the answers and there will never be any exact answers. We can only hope to discern the patterns of society.
+
+## Bias Identification
+
+### Often, we associate the word "bias" with inner-prejudiced thoughts or opinions. Or maybe its favoring of one thing over another. Bias is different in research. Bias for this data is something that you have to look beyond the numbers. One instance of bias could be under-reporting of shooting incidents in one borough or neighborhood over another. Maybe one is more prone to violent incidents so there is a loss of sensitivity to shootings and "minor shootings" go unreported. There could be mistakes in reporting the location of a shooting. Maybe the streets get written down wrong. The last bias I'll mention is one within the researcher. There is data regarding ethnicity of either the perpetrator or the victim. If there was someone who had racial prejudice against a certain group, they might find themselves trying to change the analysis to fit their hateful thoughts.
+
+### I think the greatest way to reduce bias is simply being aware of it. If you know of its existence then you will not wander into it. Bias can be further eliminated with more and more research that compounds on your findings. If your data says one thing and 20 other people have data saying the same thing, then that adds validity to your research and is an indication of low bias.
